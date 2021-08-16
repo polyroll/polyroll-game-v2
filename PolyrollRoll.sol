@@ -33,6 +33,7 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
     address public constant VRF_COORDINATOR = 0x3d2341ADb2D31f1c5530cDC622016af293177AE0;
     bytes32 public keyHash = 0xf86195cf7690c55907b2b611ebb7343a6f649bff128701cc542f0569e2c549da;
     uint public chainlinkFee = 100000000000000; // 0.0001 LINK
+    uint maxReward = 20000 ether;
 
     // Each bet is deducted 100 basis points (1%) in favor of the house
     uint public houseEdgeBP = 100;
@@ -67,7 +68,7 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
     // A bet amount of 200 ether will have a wealth tax of 1% in addition to house edge.
     // A bet amount of 400 ether will have a wealth tax of 2% in addition to house edge.
     uint public wealthTaxThreshold = 2000 ether;
-    uint public wealthTaxBP = 40;
+    uint public wealthTaxBP = 0;
 
     // Minimum and maximum bet amounts.
     uint public minBetAmount = 2 ether;
@@ -100,8 +101,6 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
         uint outcome;
         // Win amount.
         uint winAmount;
-        // Transaction mining reward ROLL amount;
-        uint rollReward;
     }
 
     // Array of bets
@@ -111,14 +110,14 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
     mapping(bytes32 => uint) public betMap;
 
     // Percentage of house edge fees to be rewarded to losing gambler.
-    uint public rewardPct = 30;
+    uint public rewardPct = 20;
 
     // Signed integer used for tracking house profit since inception.
     int public houseProfit;
 
     // Events
     event BetPlaced(uint indexed betId, address indexed gambler, uint amount, uint8 indexed modulo, uint8 rollUnder, uint40 mask);
-    event BetSettled(uint indexed betId, uint outcome, uint winAmount, uint rollReward);
+    event BetSettled(uint indexed betId, address indexed gambler, uint amount, uint8 indexed modulo, uint8 rollUnder, uint40 mask, uint outcome, uint winAmount, uint rollReward);
     event BetRefunded(uint indexed betId, address indexed gambler, uint amount);
 
     // Constructor. Using Chainlink VRFConsumerBase constructor.
@@ -187,7 +186,13 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
     // Set transaction mining reward as a percentage of house edge fees.
     // Setting rewardPct to 100% effectively leads to an expectation value of 0.
     function setRewardPct(uint _rewardPct) external onlyOwner {
+        require(_rewardPct <= 100, "rewardPct exceeds 100%");
         rewardPct = _rewardPct;
+    }
+
+    // Set maximum ROLL reward that a user can receive per bet.
+    function setMaxReward(uint _maxReward) external onlyOwner {
+        maxReward = _maxReward;
     }
 
     // Place bet
@@ -255,8 +260,7 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
                 gambler: msg.sender,
                 isSettled: false,
                 outcome: 0,
-                winAmount: 0,
-                rollReward: 0
+                winAmount: 0
             }
         ));
     }
@@ -274,9 +278,13 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
     }
 
     // Expected ROLL tokens to be rewarded if lose bet.
-    function getRollReward(uint amount, uint modulo, uint rollUnder) private view returns (uint rollReward) {
+    function getRollReward(uint amount, uint modulo, uint rollUnder) private view returns (uint) {
         // ROLL reward equals house edge fees, divided by win probability, multiplied by rewardPct.
-        rollReward = amount * (houseEdgeBP + getEffectiveWealthTaxBP(amount)) / 10000 * modulo / (modulo - rollUnder) * rewardPct / 100;
+        uint rollReward = amount * (houseEdgeBP + getEffectiveWealthTaxBP(amount)) / 10000 * modulo / (modulo - rollUnder) * rewardPct / 100;
+        if (rollReward > maxReward) {
+            rollReward = maxReward;
+        }
+        return rollReward;
     }
 
     // Callback function called by Chainlink VRF coordinator.
@@ -334,7 +342,6 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
         bet.isSettled = true;
         bet.winAmount = winAmount;
         bet.outcome = outcome;
-        bet.rollReward = rollReward;
 
         // Send prize to winner, add ROLL reward to loser, and update house profit.
         if (winAmount > 0) {
@@ -346,7 +353,7 @@ contract PolyrollRoll is VRFConsumerBase, Ownable, ReentrancyGuard {
         }
 
         // Record bet settlement in event log.
-        emit BetSettled(betId, outcome, winAmount, rollReward);
+        emit BetSettled(betId, gambler, amount, uint8(modulo), uint8(rollUnder), bet.mask, outcome, winAmount, rollReward);
     }
 
     // Owner can withdraw funds not exceeding balance minus potential win amounts by open bets.
