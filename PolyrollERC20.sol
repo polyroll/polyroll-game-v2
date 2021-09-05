@@ -28,7 +28,7 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     // Token to be used in this game contract
     address public gameToken;
 
-    // Modifier to allow Polyroll to set play to earn parameters
+    // Modifier to allow Polyroll to set play-to-earn parameters
     address public polyroll = 0x7a2B82B7427e587Ca75c7962679d001Fb737ffA4;
     modifier onlyPolyroll() {
         require(msg.sender == polyroll, "Only Polyroll can call this");
@@ -338,7 +338,7 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     // Expected ROLL tokens to be rewarded if lose bet.
     function getRollReward(uint amount, uint modulo, uint rollUnder) private view returns (uint) {
         // ROLL reward equals house edge fees, divided by win probability, multiplied by rewardPct.
-        uint rollReward = rollGameRatio * amount * (houseEdgeBP + getEffectiveWealthTaxBP(amount)) / 10000 * modulo / (modulo - rollUnder) * rewardPct / 100;
+        uint rollReward = rollGameRatio * amount * (houseEdgeBP + getEffectiveWealthTaxBP(amount)) / 10000 * modulo / (modulo - rollUnder) * rewardPct / 100 / SAFETY_FACTOR;
         if (rollReward > maxRollReward) {
             rollReward = maxRollReward;
         }
