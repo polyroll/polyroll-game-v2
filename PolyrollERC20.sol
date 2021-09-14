@@ -78,14 +78,14 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     // A bet amount of 200 ether will have a wealth tax of 1% in addition to house edge.
     // A bet amount of 400 ether will have a wealth tax of 2% in addition to house edge.
     uint public wealthTaxThreshold = 250 ether;
-    uint public wealthTaxBP = 100;
+    uint public wealthTaxBP = 0;
 
     // Minimum and maximum bet amounts.
-    uint public minBetAmount = 1 ether;
-    uint public maxBetAmount = 500 ether;
+    uint public minBetAmount = 2 ether;
+    uint public maxBetAmount = 100 ether;
 
     // Balance-to-maxProfit ratio. Used to dynamically adjusts maxProfit based on balance.
-    uint public balanceMaxProfitRatio = 1;
+    uint public balanceMaxProfitRatio = 24;
 
     // Funds that are locked in potentially winning bets. Prevents contract from committing to new bets that it cannot pay out.
     uint public lockedInBets;
