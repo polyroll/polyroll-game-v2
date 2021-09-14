@@ -8,7 +8,7 @@ import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/release-v3.1
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/release-v3.1.0/contracts/token/ERC20/SafeERC20.sol";
 import "./libs/IMiner.sol";
 
-// PolyrollERC20 is the dealer of ROLL token based random number games at Polyroll.org: Coin Flip, Dice Roll, Polyroll, Roulette.
+// PolyrollERC20 is the dealer of ERC20 token based random number games at Polyroll.org: Coin Flip, Dice Roll, Polyroll, Roulette.
 /*
 v2 has the same logic as v1, with the following updates:
 - Transaction Mining: Contract is linked to TransactionMiner contract to award ROLL tokens to gamblers who lost their bets.
@@ -35,9 +35,9 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
         _;
     }
 
-    // Parameters for distributing house edge fees to staking pool
-    uint public houseEdgeSharePercent = 50; // 50% of house edge fees goes to staking pool
-    address public stakingPool;
+    // Parameters for distributing house profit to Polyroll staking pool
+    uint public polyrollSharePercent = 50; // 50% of profit goes to Polyroll
+    int public polyrollShare; // signed integer for tracking profit share for Polyroll
 
     // Chainlink VRF related parameters
     address public constant LINK_TOKEN = 0xb0897686c545045aFc77CF20eC7A532E3120E0F1;
@@ -77,15 +77,15 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     // For example, if wealthTaxThreshold = 200 ether and wealthTaxBP = 100,
     // A bet amount of 200 ether will have a wealth tax of 1% in addition to house edge.
     // A bet amount of 400 ether will have a wealth tax of 2% in addition to house edge.
-    uint public wealthTaxThreshold = 2000 ether;
-    uint public wealthTaxBP = 0;
+    uint public wealthTaxThreshold = 250 ether;
+    uint public wealthTaxBP = 100;
 
     // Minimum and maximum bet amounts.
-    uint public minBetAmount = 2 ether;
-    uint public maxBetAmount = 100 ether;
+    uint public minBetAmount = 1 ether;
+    uint public maxBetAmount = 500 ether;
 
     // Balance-to-maxProfit ratio. Used to dynamically adjusts maxProfit based on balance.
-    uint public balanceMaxProfitRatio = 24;
+    uint public balanceMaxProfitRatio = 1;
 
     // Funds that are locked in potentially winning bets. Prevents contract from committing to new bets that it cannot pay out.
     uint public lockedInBets;
@@ -133,23 +133,22 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     address public gameMaticLP;
     uint public rollGameRatio;
     uint public rollGameBlockTimestampLast;
-    uint public maxRollReward = 5000 ether;
+    uint public maxRollReward = 2000 ether;
 
     // Events
     event BetPlaced(uint indexed betId, address indexed gambler, uint amount, uint8 indexed modulo, uint8 rollUnder, uint40 mask);
     event BetSettled(uint indexed betId, address indexed gambler, uint amount, uint8 indexed modulo, uint8 rollUnder, uint40 mask, uint outcome, uint winAmount, uint rollReward);
     event BetRefunded(uint indexed betId, address indexed gambler, uint amount);
+    event PolyrollShareWithdrawn(int amount);
 
     // Constructor. Using Chainlink VRFConsumerBase constructor.
     constructor(
         address _gameToken,
         address _gameMaticLP,
-        address _stakingPool,
         IMiner _miner
     ) VRFConsumerBase(VRF_COORDINATOR, LINK_TOKEN) public {
         gameToken = _gameToken;
         gameMaticLP = _gameMaticLP;
-        stakingPool = _stakingPool;
         miner = _miner;
     }
 
@@ -215,11 +214,24 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
         maxRollReward = _maxRollReward;
     }
 
-    // Set houseEdgeSharePercent & stakingPool
-    function setStakingPool(uint _houseEdgeSharePercent, address _stakingPool) external onlyPolyroll {
-        require(_houseEdgeSharePercent <= 60, 'houseEdgeSharePercent exceeds 60%');
-        houseEdgeSharePercent = _houseEdgeSharePercent;
-        stakingPool = _stakingPool;
+    // Set polyrollSharePercent
+    function setPolyrollSharePercent(uint _polyrollSharePercent) external onlyPolyroll {
+        require(_polyrollSharePercent <= 50, 'polyrollSharePercent exceeds 50%');
+        polyrollSharePercent = _polyrollSharePercent;
+    }
+
+    // Polyroll can withdraw their share of profit
+    function withdrawPolyrollShare(address beneficiary) external onlyPolyroll {
+        require(polyrollShare > 0, "polyrollShare below zero");
+        require(uint(polyrollShare) <= IERC20(gameToken).balanceOf(address(this)) - lockedInBets, "polyrollShare exceeds balance");
+        IERC20(gameToken).safeTransfer(beneficiary, uint(polyrollShare));
+        emit PolyrollShareWithdrawn(polyrollShare);
+        polyrollShare = 0;
+    }
+    
+    // Polyroll can withdraw LINK tokens.
+    function withdrawLink() external onlyPolyroll {
+        IERC20(LINK_TOKEN).safeTransfer(polyroll, IERC20(LINK_TOKEN).balanceOf(address(this)));
     }
 
     // Get ROLL/MATIC price with safeguards against oracle attacks.
@@ -258,9 +270,6 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
 
         // Transfer game token to contract
         IERC20(gameToken).safeTransferFrom(address(msg.sender), address(this), amount);
-
-        // Transfer house edge fee cut to staking pool
-        IERC20(gameToken).safeTransfer(address(stakingPool), amount*(houseEdgeBP+getEffectiveWealthTaxBP(amount))*houseEdgeSharePercent/1000000);
 
         // Update ROLL/MATIC price if data is outdated.
         updateRollGameRatio();
@@ -401,12 +410,14 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
         bet.winAmount = winAmount;
         bet.outcome = outcome;
 
-        // Send prize to winner, add ROLL reward to loser, and update house profit.
+        // Send prize to winner, add ROLL reward to loser, update house profit, and update polyrollShare.
         if (winAmount > 0) {
             houseProfit -= int(winAmount - amount);
+            polyrollShare -= int(winAmount - amount) * int(polyrollSharePercent) / 100;
             IERC20(gameToken).safeTransfer(address(gambler), winAmount);
         } else {
             houseProfit += int(amount);
+            polyrollShare += int(amount * polyrollSharePercent) / 100;
             miner.addReward(gambler, rollReward);
         }
 
@@ -418,11 +429,6 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     function withdrawFunds(address beneficiary, uint withdrawAmount) external onlyOwner {
         require(withdrawAmount <= IERC20(gameToken).balanceOf(address(this)) - lockedInBets, "Withdrawal exceeds limit");
         IERC20(gameToken).safeTransfer(beneficiary, withdrawAmount);
-    }
-    
-    // Owner can withdraw LINK tokens.
-    function withdrawLink() external onlyOwner {
-        IERC20(LINK_TOKEN).safeTransfer(owner(), IERC20(LINK_TOKEN).balanceOf(address(this)));
     }
 
     // Return the bet in the very unlikely scenario it was not settled by Chainlink VRF. 
