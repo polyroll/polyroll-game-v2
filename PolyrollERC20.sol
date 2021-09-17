@@ -23,7 +23,7 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // Import contract that governs transaction mining and referral fees
-    IMiner public miner;
+    IMiner public miner = IMiner(0xC96D9032770010f5f3D167cA4eeca84a0Bca0Fa2);
 
     // Token to be used in this game contract
     address public gameToken;
@@ -81,8 +81,8 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     uint public wealthTaxBP = 0;
 
     // Minimum and maximum bet amounts.
-    uint public minBetAmount = 2 ether;
-    uint public maxBetAmount = 100 ether;
+    uint public minBetAmount = 50 ether;
+    uint public maxBetAmount = 2500 ether;
 
     // Balance-to-maxProfit ratio. Used to dynamically adjusts maxProfit based on balance.
     uint public balanceMaxProfitRatio = 24;
@@ -144,12 +144,10 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     // Constructor. Using Chainlink VRFConsumerBase constructor.
     constructor(
         address _gameToken,
-        address _gameMaticLP,
-        IMiner _miner
+        address _gameMaticLP
     ) VRFConsumerBase(VRF_COORDINATOR, LINK_TOKEN) public {
         gameToken = _gameToken;
         gameMaticLP = _gameMaticLP;
-        miner = _miner;
     }
 
     // See game token balance.
@@ -238,7 +236,7 @@ contract PolyrollERC20 is VRFConsumerBase, Ownable, ReentrancyGuard {
     function updateRollGameRatio() internal {
         // Run function if 30 minutes elapsed.
         if (block.timestamp - rollGameBlockTimestampLast >= 1800) {
-            require(IERC20(MATIC_TOKEN).balanceOf(gameMaticLP) > 10000000000000000000000, "Less than 10000 MATIC in LP");
+            require(IERC20(MATIC_TOKEN).balanceOf(gameMaticLP) > 10000 ether, "Less than 10000 MATIC in LP");
 
             // Get ratio of ROLL to game token multiplied by SAFETY_FACTOR to avoid losing precision.
             uint newRollGameRatio = SAFETY_FACTOR * IERC20(ROLL_TOKEN).balanceOf(ROLL_MATIC_LP) / IERC20(MATIC_TOKEN).balanceOf(ROLL_MATIC_LP) * IERC20(MATIC_TOKEN).balanceOf(gameMaticLP) / IERC20(gameToken).balanceOf(gameMaticLP);
